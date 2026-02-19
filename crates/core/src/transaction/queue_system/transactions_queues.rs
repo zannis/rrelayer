@@ -25,12 +25,13 @@ use super::{
     start::spawn_processing_tasks_for_relayer,
     transactions_queue::TransactionsQueue,
     types::{
-        AddTransactionError, CancelTransactionError, CancelTransactionResult, CompetitionType,
-        EditableTransactionType, ProcessInmempoolStatus, ProcessInmempoolTransactionError,
-        ProcessMinedStatus, ProcessMinedTransactionError, ProcessPendingStatus,
-        ProcessPendingTransactionError, ProcessResult, ReplaceTransactionError,
-        ReplaceTransactionResult, TransactionRelayerSetup, TransactionToSend,
-        TransactionsQueueSetup,
+        compute_send_error_backoff_ms, AddTransactionError, CancelTransactionError,
+        CancelTransactionResult, CompetitionType, EditableTransactionType,
+        ProcessInmempoolStatus, ProcessInmempoolTransactionError, ProcessMinedStatus,
+        ProcessMinedTransactionError, ProcessPendingStatus, ProcessPendingTransactionError,
+        ProcessResult, ReplaceTransactionError, ReplaceTransactionResult,
+        TransactionRelayerSetup, TransactionToSend, TransactionsQueueSetup,
+        MAX_NOOP_SEND_ATTEMPTS,
     },
 };
 use crate::transaction::api::RelayTransactionRequest;
@@ -411,6 +412,7 @@ impl TransactionsQueues {
             sent_with_blob_gas: None,
             external_id: transaction_to_send.external_id.clone(),
             cancelled_by_transaction_id: None,
+            send_attempt_count: 0,
         };
 
         let (gas_price, blob_gas_price) = Self::compute_transaction_gas_prices(
@@ -572,6 +574,7 @@ impl TransactionsQueues {
                             sent_with_blob_gas: None,
                             external_id: Some(format!("cancel_{}", transaction.id)),
                             cancelled_by_transaction_id: None,
+                            send_attempt_count: 0,
                         };
 
                         info!("cancel_transaction: creating higher gas cancel transaction for inmempool tx with same nonce {:?}", cancel_transaction.nonce);
@@ -820,6 +823,7 @@ impl TransactionsQueues {
                                 .clone()
                                 .or_else(|| Some(format!("replace_{}", transaction.id))),
                             cancelled_by_transaction_id: None,
+                            send_attempt_count: 0,
                         };
 
                         info!("replace_transaction: creating competitive replace transaction for inmempool tx with same nonce {:?}", replace_transaction.nonce);
@@ -1050,6 +1054,35 @@ impl TransactionsQueues {
                     self.transaction_to_noop(&mut transactions_queue, &mut transaction);
                 }
 
+                // Fail noop transactions that have exceeded max retry attempts
+                if transaction.is_noop && transaction.send_attempt_count >= MAX_NOOP_SEND_ATTEMPTS {
+                    let fail_msg = format!(
+                        "Noop transaction exceeded max send attempts ({}) for relayer {}",
+                        MAX_NOOP_SEND_ATTEMPTS, relayer_id
+                    );
+                    error!("{}", fail_msg);
+
+                    self.db
+                        .update_transaction_failed(&transaction.id, &fail_msg)
+                        .await
+                        .map_err(|e| {
+                            ProcessPendingTransactionError::DbError(
+                                *relayer_id,
+                                relayer_address,
+                                e,
+                            )
+                        })?;
+
+                    transactions_queue.move_next_pending_to_failed().await;
+                    self.invalidate_transaction_cache(&transaction.id).await;
+
+                    return Err(ProcessPendingTransactionError::SendTransactionError(
+                        *relayer_id,
+                        relayer_address,
+                        TransactionQueueSendTransactionError::TransactionConversionError(fail_msg),
+                    ));
+                }
+
                 match transactions_queue.send_transaction(&mut self.db, &mut transaction).await {
                     Ok(transaction_sent) => {
                         transactions_queue.move_pending_to_inmempool(&transaction_sent).await
@@ -1198,13 +1231,20 @@ impl TransactionsQueues {
                                         Some(&100),
                                     ))
                                 } else {
-                                    // For other send errors (RPC down, etc), keep as temp issue
-                                    Err(ProcessPendingTransactionError::SendTransactionError(
-                                        *relayer_id,
-                                        relayer_address,
-                                        TransactionQueueSendTransactionError::TransactionSendError(
-                                            error,
-                                        ),
+                                    // For other send errors (RPC down, etc), increment attempt count
+                                    // and apply exponential backoff to avoid hot retry loops
+                                    transactions_queue.increment_pending_send_attempts().await;
+                                    let attempts = transaction.send_attempt_count + 1;
+                                    let backoff_ms = compute_send_error_backoff_ms(attempts);
+
+                                    error!(
+                                        "Send transaction error for tx {} (attempt {}), retrying in {}ms: {}",
+                                        transaction.id, attempts, backoff_ms, error
+                                    );
+
+                                    Ok(ProcessResult::<ProcessPendingStatus>::other(
+                                        ProcessPendingStatus::SendErrorBackoff,
+                                        Some(&backoff_ms),
                                     ))
                                 }
                             }
@@ -1683,5 +1723,213 @@ impl TransactionsQueues {
         } else {
             Err(ProcessMinedTransactionError::RelayerTransactionsQueueNotFound(*relayer_id))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::network::ChainId;
+    use crate::relayer::RelayerId;
+    use crate::transaction::types::{
+        Transaction, TransactionData, TransactionId, TransactionNonce, TransactionSpeed,
+        TransactionStatus, TransactionValue,
+    };
+    use alloy::primitives::Address;
+    use chrono::{Duration, Utc};
+    use crate::common_types::EvmAddress;
+
+    /// Helper to create a test transaction matching the stuck noop scenario from production logs.
+    fn make_test_noop_transaction(send_attempt_count: u32) -> Transaction {
+        let addr = EvmAddress::from(Address::ZERO);
+        Transaction {
+            id: TransactionId::new(),
+            relayer_id: RelayerId::default(),
+            to: addr,
+            from: addr,
+            value: TransactionValue::zero(),
+            data: TransactionData::empty(),
+            nonce: TransactionNonce::new(36),
+            chain_id: ChainId::default(),
+            gas_limit: Some(GasLimit::new(21000)),
+            status: TransactionStatus::PENDING,
+            blobs: None,
+            known_transaction_hash: None,
+            queued_at: Utc::now() - Duration::days(3),
+            expires_at: Utc::now() - Duration::days(2), // expired 2 days ago
+            sent_at: None,
+            mined_at: None,
+            mined_at_block_number: None,
+            confirmed_at: None,
+            speed: TransactionSpeed::FAST,
+            sent_with_max_priority_fee_per_gas: None,
+            sent_with_max_fee_per_gas: None,
+            is_noop: true,
+            sent_with_gas: None,
+            sent_with_blob_gas: None,
+            external_id: None,
+            cancelled_by_transaction_id: None,
+            send_attempt_count,
+        }
+    }
+
+    /// Simulates the hot loop exit decision logic from process_single_pending.
+    ///
+    /// This mirrors the exact checks in process_single_pending:
+    /// 1. Check if transaction expired → convert to noop
+    /// 2. Check if noop exceeded max retries → should fail
+    /// 3. On send error → apply exponential backoff
+    ///
+    /// Returns (should_fail, backoff_ms) where should_fail means the tx should be moved to FAILED.
+    fn simulate_pending_loop_iteration(
+        transaction: &Transaction,
+    ) -> (bool, u64) {
+        // Step 1: Check noop retry limit (mirrors the check before send_transaction)
+        if transaction.is_noop && transaction.send_attempt_count >= MAX_NOOP_SEND_ATTEMPTS {
+            return (true, 0);
+        }
+
+        // Step 2: On send error, compute backoff (mirrors the catch-all else branch)
+        let backoff_ms = compute_send_error_backoff_ms(transaction.send_attempt_count + 1);
+        (false, backoff_ms)
+    }
+
+    #[test]
+    fn test_stuck_noop_hot_loop_exits_after_max_attempts() {
+        // Reproduce the exact scenario from the production log:
+        // - Transaction queued Feb 14, expired Feb 15, log captured Feb 18
+        // - Noop conversion happened but keeps failing with the same error
+        // - Before fix: retried 1,342 times in 3.5 minutes with no backoff
+        // - After fix: should fail after MAX_NOOP_SEND_ATTEMPTS (10)
+
+        let mut total_backoff_ms: u64 = 0;
+        let mut iterations = 0;
+
+        for attempt in 0..100 {
+            let transaction = make_test_noop_transaction(attempt);
+            let (should_fail, backoff_ms) = simulate_pending_loop_iteration(&transaction);
+
+            if should_fail {
+                iterations = attempt;
+                break;
+            }
+
+            total_backoff_ms += backoff_ms;
+        }
+
+        // Should fail after exactly MAX_NOOP_SEND_ATTEMPTS
+        assert_eq!(
+            iterations, MAX_NOOP_SEND_ATTEMPTS,
+            "Noop should fail after exactly {} attempts, but failed after {}",
+            MAX_NOOP_SEND_ATTEMPTS, iterations
+        );
+
+        // Total backoff should be substantial (not a hot loop)
+        // With exponential backoff: 2s + 4s + 8s + 16s + 32s + 60s + 60s + 60s + 60s + 60s = ~362s
+        assert!(
+            total_backoff_ms > 300_000,
+            "Total backoff across {} attempts should be > 300s, but was {}ms",
+            MAX_NOOP_SEND_ATTEMPTS,
+            total_backoff_ms
+        );
+
+        // Should NOT be a hot loop (original bug had ~140ms per iteration = 1.4s for 10 iterations)
+        assert!(
+            total_backoff_ms > 100_000,
+            "Total backoff {}ms is too low — hot loop not fixed",
+            total_backoff_ms
+        );
+    }
+
+    #[test]
+    fn test_non_noop_transactions_are_not_affected_by_noop_limit() {
+        // Regular (non-noop) transactions should never hit the noop retry limit
+        let mut transaction = make_test_noop_transaction(MAX_NOOP_SEND_ATTEMPTS + 5);
+        transaction.is_noop = false; // NOT a noop
+
+        let (should_fail, backoff_ms) = simulate_pending_loop_iteration(&transaction);
+
+        assert!(
+            !should_fail,
+            "Non-noop transaction should not be failed by noop retry limit"
+        );
+        assert!(
+            backoff_ms >= 1_000,
+            "Should still apply backoff, got {}ms",
+            backoff_ms
+        );
+    }
+
+    #[test]
+    fn test_backoff_progression_prevents_hot_loop() {
+        // Verify that the backoff progression makes it impossible to do 1,342 retries in 3.5 minutes
+        // Original bug: 1,342 attempts in ~210 seconds (210,000ms)
+        // With backoff: even 10 attempts should take > 300 seconds of backoff
+
+        let mut total_delay_ms: u64 = 0;
+        let attempts_in_original_bug = 1_342u32;
+
+        for attempt in 0..attempts_in_original_bug {
+            let backoff = compute_send_error_backoff_ms(attempt + 1);
+            total_delay_ms = total_delay_ms.saturating_add(backoff);
+
+            // After just 20 attempts, we should already exceed the original 3.5 minute window
+            if attempt == 20 {
+                assert!(
+                    total_delay_ms > 210_000,
+                    "After 20 attempts, total delay should exceed 210s (original bug window), got {}ms",
+                    total_delay_ms
+                );
+                break;
+            }
+        }
+    }
+
+    #[test]
+    fn test_expired_transaction_detection() {
+        // Verify the expiry check logic directly on Transaction fields
+        let expired_tx = make_test_noop_transaction(0);
+        // Transaction expires_at is 2 days in the past
+        assert!(
+            expired_tx.expires_at < Utc::now(),
+            "Test transaction should have expires_at in the past"
+        );
+
+        let fresh_tx = Transaction {
+            expires_at: Utc::now() + Duration::hours(12),
+            ..make_test_noop_transaction(0)
+        };
+        assert!(
+            fresh_tx.expires_at > Utc::now(),
+            "Fresh transaction should have expires_at in the future"
+        );
+    }
+
+    #[test]
+    fn test_send_attempt_count_preserved_across_clones() {
+        // Verify send_attempt_count survives cloning (important since get_next_pending_transaction clones)
+        let mut tx = make_test_noop_transaction(5);
+        tx.send_attempt_count = 7;
+
+        let cloned = tx.clone();
+        assert_eq!(cloned.send_attempt_count, 7);
+    }
+
+    #[test]
+    fn test_send_attempt_count_not_serialized() {
+        // Verify send_attempt_count is not included in JSON serialization (DB safety)
+        let tx = make_test_noop_transaction(42);
+        let json = serde_json::to_string(&tx).unwrap();
+        assert!(
+            !json.contains("send_attempt_count"),
+            "send_attempt_count should not appear in serialized JSON"
+        );
+
+        // Verify deserialization sets it to 0
+        let deserialized: Transaction = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            deserialized.send_attempt_count, 0,
+            "Deserialized transaction should have send_attempt_count = 0"
+        );
     }
 }

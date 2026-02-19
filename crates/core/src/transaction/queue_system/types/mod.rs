@@ -14,7 +14,8 @@ pub use transaction_to_send::TransactionToSend;
 
 mod process_queue_result;
 pub use process_queue_result::{
-    ProcessInmempoolStatus, ProcessMinedStatus, ProcessPendingStatus, ProcessResult,
+    compute_send_error_backoff_ms, ProcessInmempoolStatus, ProcessMinedStatus,
+    ProcessPendingStatus, ProcessResult, MAX_NOOP_SEND_ATTEMPTS,
 };
 
 mod transactions_queue_setup;

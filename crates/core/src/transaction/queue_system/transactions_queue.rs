@@ -289,6 +289,14 @@ impl TransactionsQueue {
         }
     }
 
+    /// Increments the send attempt counter for the front pending transaction.
+    pub async fn increment_pending_send_attempts(&self) {
+        let mut transactions = self.pending_transactions.lock().await;
+        if let Some(tx) = transactions.front_mut() {
+            tx.send_attempt_count += 1;
+        }
+    }
+
     pub async fn move_next_pending_to_failed(&mut self) {
         let mut transactions = self.pending_transactions.lock().await;
         if let Some(tx) = transactions.front() {

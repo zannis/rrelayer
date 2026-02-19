@@ -113,6 +113,11 @@ pub struct Transaction {
 
     #[serde(rename = "cancelledByTransactionId", skip_serializing_if = "Option::is_none", default)]
     pub cancelled_by_transaction_id: Option<TransactionId>,
+
+    /// Tracks the number of failed send attempts for this transaction (in-memory only).
+    /// Used to implement exponential backoff and noop retry limits.
+    #[serde(skip)]
+    pub send_attempt_count: u32,
 }
 
 impl Display for Transaction {
