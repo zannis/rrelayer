@@ -813,6 +813,8 @@ pub struct NetworkAutomaticTopUpConfig {
     pub native: Option<NativeTokenConfig>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub erc20_tokens: Option<Vec<Erc20TokenConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub additional_addresses: Option<Vec<EvmAddress>>,
 }
 
 impl NetworkAutomaticTopUpConfig {
@@ -921,6 +923,11 @@ pub struct AdvancedConfig {
     /// Defaults to false when not specified.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_fail_expired_transactions: Option<bool>,
+    /// When enabled, allows the automatic top-up job to send funds to addresses
+    /// specified in `additional_addresses` that are not registered relayers.
+    /// Defaults to false when not specified.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub allow_non_relayer_topups: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

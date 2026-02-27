@@ -41,6 +41,7 @@ pub struct AutomaticTopUpTask {
     relayer_refresh_interval: Interval,
     top_up_check_interval: Interval,
     transactions_queues: Arc<tokio::sync::Mutex<TransactionsQueues>>,
+    allow_non_relayer_topups: bool,
 }
 
 impl AutomaticTopUpTask {
@@ -51,6 +52,9 @@ impl AutomaticTopUpTask {
         transactions_queues: Arc<tokio::sync::Mutex<TransactionsQueues>>,
         safe_proxy_manager: Arc<SafeProxyManager>,
     ) -> Self {
+        let allow_non_relayer_topups =
+            config.advanced.as_ref().and_then(|a| a.allow_non_relayer_topups).unwrap_or(false);
+
         Self {
             postgres_client,
             providers,
@@ -60,6 +64,7 @@ impl AutomaticTopUpTask {
             relayer_refresh_interval: interval(Duration::from_secs(30)),
             top_up_check_interval: interval(Duration::from_secs(30)),
             transactions_queues,
+            allow_non_relayer_topups,
         }
     }
 
@@ -184,42 +189,98 @@ impl AutomaticTopUpTask {
             }
         };
 
-        if relayer_addresses.is_empty() {
-            info!("No relayer addresses found for top-up on chain {}", chain_id);
+        let additional_addresses = self.resolve_additional_addresses(config, &relayer_addresses);
+
+        if !additional_addresses.is_empty() {
+            info!(
+                "Including {} non-relayer additional addresses for top-up on chain {}",
+                additional_addresses.len(),
+                chain_id
+            );
+        }
+
+        if relayer_addresses.is_empty() && additional_addresses.is_empty() {
+            info!("No addresses found for top-up on chain {}", chain_id);
             return;
         }
 
         if let Some(native_config) = &config.native {
-            info!("Processing native token top-ups for {} addresses", relayer_addresses.len());
-            self.process_native_token_top_ups(
-                chain_id,
-                provider,
-                &config.from.relayer.address,
-                &relayer_addresses,
-                native_config,
-                config,
-            )
-            .await;
-        }
-
-        if let Some(erc20_tokens) = &config.erc20_tokens {
-            for (index, token_config) in erc20_tokens.iter().enumerate() {
+            if !relayer_addresses.is_empty() {
                 info!(
-                    "Processing ERC-20 token top-ups for token {} ({}/{}) on {} addresses",
-                    token_config.address,
-                    index + 1,
-                    erc20_tokens.len(),
+                    "Processing native token top-ups for {} relayer addresses",
                     relayer_addresses.len()
                 );
-                self.process_erc20_token_top_ups(
+                self.process_native_token_top_ups(
                     chain_id,
                     provider,
                     &config.from.relayer.address,
                     &relayer_addresses,
-                    token_config,
+                    native_config,
                     config,
+                    false,
                 )
                 .await;
+            }
+
+            if !additional_addresses.is_empty() {
+                info!(
+                    "Processing native token top-ups for {} non-relayer additional addresses",
+                    additional_addresses.len()
+                );
+                self.process_native_token_top_ups(
+                    chain_id,
+                    provider,
+                    &config.from.relayer.address,
+                    &additional_addresses,
+                    native_config,
+                    config,
+                    true,
+                )
+                .await;
+            }
+        }
+
+        if let Some(erc20_tokens) = &config.erc20_tokens {
+            for (index, token_config) in erc20_tokens.iter().enumerate() {
+                if !relayer_addresses.is_empty() {
+                    info!(
+                        "Processing ERC-20 token top-ups for token {} ({}/{}) on {} relayer addresses",
+                        token_config.address,
+                        index + 1,
+                        erc20_tokens.len(),
+                        relayer_addresses.len()
+                    );
+                    self.process_erc20_token_top_ups(
+                        chain_id,
+                        provider,
+                        &config.from.relayer.address,
+                        &relayer_addresses,
+                        token_config,
+                        config,
+                        false,
+                    )
+                    .await;
+                }
+
+                if !additional_addresses.is_empty() {
+                    info!(
+                        "Processing ERC-20 token top-ups for token {} ({}/{}) on {} non-relayer additional addresses",
+                        token_config.address,
+                        index + 1,
+                        erc20_tokens.len(),
+                        additional_addresses.len()
+                    );
+                    self.process_erc20_token_top_ups(
+                        chain_id,
+                        provider,
+                        &config.from.relayer.address,
+                        &additional_addresses,
+                        token_config,
+                        config,
+                        true,
+                    )
+                    .await;
+                }
             }
         }
 
@@ -231,7 +292,8 @@ impl AutomaticTopUpTask {
         }
     }
 
-    /// Processes native token top-ups for relayer addresses.
+    /// Processes native token top-ups for the given addresses.
+    #[allow(clippy::too_many_arguments)]
     async fn process_native_token_top_ups(
         &self,
         chain_id: &ChainId,
@@ -240,6 +302,7 @@ impl AutomaticTopUpTask {
         relayer_addresses: &[EvmAddress],
         native_config: &NativeTokenConfig,
         config: &NetworkAutomaticTopUpConfig,
+        skip_relayer_validation: bool,
     ) {
         let mut addresses_needing_top_up = Vec::new();
 
@@ -313,6 +376,7 @@ impl AutomaticTopUpTask {
                     &address,
                     native_config,
                     config,
+                    skip_relayer_validation,
                 )
                 .await
             {
@@ -331,7 +395,8 @@ impl AutomaticTopUpTask {
         }
     }
 
-    /// Processes ERC-20 token top-ups for relayer addresses.
+    /// Processes ERC-20 token top-ups for the given addresses.
+    #[allow(clippy::too_many_arguments)]
     async fn process_erc20_token_top_ups(
         &self,
         chain_id: &ChainId,
@@ -340,6 +405,7 @@ impl AutomaticTopUpTask {
         relayer_addresses: &[EvmAddress],
         token_config: &Erc20TokenConfig,
         config: &NetworkAutomaticTopUpConfig,
+        skip_relayer_validation: bool,
     ) {
         let mut addresses_needing_top_up = Vec::new();
 
@@ -419,6 +485,7 @@ impl AutomaticTopUpTask {
                     &address,
                     token_config,
                     config,
+                    skip_relayer_validation,
                 )
                 .await
             {
@@ -439,6 +506,7 @@ impl AutomaticTopUpTask {
     }
 
     /// Sends a native token top-up transaction from one relayer to another.
+    #[allow(clippy::too_many_arguments)]
     async fn send_native_top_up_transaction(
         &self,
         chain_id: &ChainId,
@@ -447,6 +515,7 @@ impl AutomaticTopUpTask {
         relayer_address: &EvmAddress,
         native_config: &NativeTokenConfig,
         config: &NetworkAutomaticTopUpConfig,
+        skip_relayer_validation: bool,
     ) -> Result<String, String> {
         if from_address == relayer_address {
             return Err(format!(
@@ -455,21 +524,23 @@ impl AutomaticTopUpTask {
             ));
         }
 
-        match self.postgres_client.get_relayer_by_address(relayer_address, chain_id).await {
-            Ok(Some(_relayer)) => {
-                // Valid relayer, proceed
-            }
-            Ok(None) => {
-                return Err(format!(
-                    "Security check failed: relayer_address {} is not a registered relayer on chain {}",
-                    relayer_address, chain_id
-                ));
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Failed to validate relayer_address {} as relayer: {}",
-                    relayer_address, e
-                ));
+        if !skip_relayer_validation {
+            match self.postgres_client.get_relayer_by_address(relayer_address, chain_id).await {
+                Ok(Some(_relayer)) => {
+                    // Valid relayer, proceed
+                }
+                Ok(None) => {
+                    return Err(format!(
+                        "Security check failed: relayer_address {} is not a registered relayer on chain {}",
+                        relayer_address, chain_id
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to validate relayer_address {} as relayer: {}",
+                        relayer_address, e
+                    ));
+                }
             }
         }
 
@@ -657,6 +728,33 @@ impl AutomaticTopUpTask {
         }
 
         Ok(addresses)
+    }
+
+    /// Resolves additional non-relayer addresses from the config, filtering out
+    /// the from_address and any addresses already present in the relayer list.
+    /// Returns an empty list when `allow_non_relayer_topups` is disabled.
+    fn resolve_additional_addresses(
+        &self,
+        config: &NetworkAutomaticTopUpConfig,
+        relayer_addresses: &[EvmAddress],
+    ) -> Vec<EvmAddress> {
+        if !self.allow_non_relayer_topups {
+            return Vec::new();
+        }
+
+        config
+            .additional_addresses
+            .as_ref()
+            .map(|addrs| {
+                addrs
+                    .iter()
+                    .filter(|addr| {
+                        *addr != &config.from.relayer.address && !relayer_addresses.contains(addr)
+                    })
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// Checks if the from_address has sufficient native balance for top-up operations.
@@ -879,6 +977,7 @@ impl AutomaticTopUpTask {
     }
 
     /// Sends an ERC-20 token top-up transaction from one relayer to another.
+    #[allow(clippy::too_many_arguments)]
     async fn send_erc20_top_up_transaction(
         &self,
         chain_id: &ChainId,
@@ -887,6 +986,7 @@ impl AutomaticTopUpTask {
         relayer_address: &EvmAddress,
         token_config: &Erc20TokenConfig,
         config: &NetworkAutomaticTopUpConfig,
+        skip_relayer_validation: bool,
     ) -> Result<String, String> {
         if from_address == relayer_address {
             return Err(format!(
@@ -896,21 +996,23 @@ impl AutomaticTopUpTask {
         }
 
         // Validate that relayer_address is a relayer for security
-        match self.postgres_client.get_relayer_by_address(relayer_address, chain_id).await {
-            Ok(Some(_relayer)) => {
-                // Valid relayer, proceed
-            }
-            Ok(None) => {
-                return Err(format!(
-                    "Security check failed: relayer_address {} is not a registered relayer on chain {}",
-                    relayer_address, chain_id
-                ));
-            }
-            Err(e) => {
-                return Err(format!(
-                    "Failed to validate relayer_address {} as relayer: {}",
-                    relayer_address, e
-                ));
+        if !skip_relayer_validation {
+            match self.postgres_client.get_relayer_by_address(relayer_address, chain_id).await {
+                Ok(Some(_relayer)) => {
+                    // Valid relayer, proceed
+                }
+                Ok(None) => {
+                    return Err(format!(
+                        "Security check failed: relayer_address {} is not a registered relayer on chain {}",
+                        relayer_address, chain_id
+                    ));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to validate relayer_address {} as relayer: {}",
+                        relayer_address, e
+                    ));
+                }
             }
         }
 
