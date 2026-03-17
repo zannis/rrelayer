@@ -36,7 +36,7 @@ pub use rrelayer_core::{
         },
     },
     webhooks::{
-        WebhookBalanceAlertData, WebhookEventType, WebhookLowBalancePayload, WebhookPayload,
-        WebhookSigningData, WebhookSigningPayload, WebhookTransactionData,
+        WebhookBalanceAlertData, WebhookEnvelope, WebhookEventType, WebhookLowBalancePayload,
+        WebhookPayload, WebhookSigningData, WebhookSigningPayload, WebhookTransactionData,
     },
 };
