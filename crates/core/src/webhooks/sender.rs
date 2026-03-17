@@ -1,3 +1,4 @@
+use super::payload::WebhookEnvelope;
 use super::types::{WebhookDelivery, WebhookDeliveryConfig};
 use crate::network::ChainId;
 use crate::relayer::RelayerId;
@@ -112,21 +113,19 @@ impl WebhookSender {
         &self,
         delivery: &WebhookDelivery,
     ) -> Result<Response, reqwest::Error> {
-        let webhook_envelope = serde_json::json!({
-            "delivery_id": delivery.id.to_string(),
-            "event_type": delivery.event_type,
-            "timestamp": delivery.created_at.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
-            "attempt": delivery.attempts + 1,
-            "payload": delivery.payload
-        });
+        let envelope = WebhookEnvelope::new(
+            delivery.id.to_string(),
+            delivery.event_type.clone(),
+            delivery.created_at.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs(),
+            delivery.attempts + 1,
+            delivery.payload.clone(),
+        );
 
         self.client
             .post(&delivery.webhook_config.endpoint)
             .header("Content-Type", "application/json")
             .header("x-rrelayer-shared-secret", &delivery.webhook_config.shared_secret)
-            .json(&webhook_envelope)
+            .json(&envelope)
             .send()
             .await
     }

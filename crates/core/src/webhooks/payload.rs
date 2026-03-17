@@ -14,6 +14,29 @@ use serde::{Deserialize, Serialize};
 
 use super::types::WebhookEventType;
 
+/// The envelope that wraps every outgoing webhook HTTP request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookEnvelope {
+    pub delivery_id: String,
+    pub event_type: WebhookEventType,
+    /// Unix timestamp (seconds) when the delivery was created
+    pub timestamp: u64,
+    pub attempt: u32,
+    pub payload: serde_json::Value,
+}
+
+impl WebhookEnvelope {
+    pub fn new(
+        delivery_id: String,
+        event_type: WebhookEventType,
+        timestamp: u64,
+        attempt: u32,
+        payload: serde_json::Value,
+    ) -> Self {
+        Self { delivery_id, event_type, timestamp, attempt, payload }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebhookPayload {
     /// Event type that triggered the webhook
