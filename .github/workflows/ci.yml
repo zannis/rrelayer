@@ -11,9 +11,9 @@ on:
 jobs:
   fmt:
     name: Rustfmt
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add rustfmt
@@ -21,9 +21,9 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: rustup component add clippy
@@ -31,9 +31,9 @@ jobs:
 
   test:
     name: Test
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -47,13 +47,13 @@ jobs:
 
   create_pr:
     name: Create Release PR
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: test
     if: |
       github.actor != 'github-actions[bot]' &&
       startsWith(github.ref, 'refs/heads/release/')
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
@@ -108,14 +108,17 @@ jobs:
 
   release:
     name: Create GitHub Release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     needs: [fmt, clippy, test]
+    outputs:
+      is_release: ${{ steps.check_release.outputs.is_release }}
+      version: ${{ steps.check_release.outputs.version }}
     if: |
       github.actor != 'github-actions[bot]' &&
       github.ref == 'refs/heads/master' &&
       github.event_name == 'push'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -140,3 +143,15 @@ jobs:
           gh release create "v${VERSION}" \
             --title "Release v${VERSION}" \
             --generate-notes
+
+  docker:
+    name: Build Docker Images
+    needs: [release]
+    if: needs.release.outputs.is_release == 'true'
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.release.outputs.version }}
+    secrets: inherit
+    permissions:
+      contents: read
+      packages: write
