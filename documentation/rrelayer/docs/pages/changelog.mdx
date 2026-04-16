@@ -16,6 +16,7 @@
 ### Bug fixes
 
 - chore: simplify CI/CD pipeline — Linux-only PR testing, Docker-only releases (no mac/windows binaries)
+- fix: transaction lookup endpoints (`GET /transactions/:id`, `GET /transactions/hash/:hash`, `GET /transactions/external/:id`) now return HTTP 404 when the transaction does not exist, instead of HTTP 200 with a `null` body. This fixes deserialization failures in the Rust SDK. The TypeScript SDK's transaction fetchers map 404 back to `null` so callers keep the same ergonomics.
 
 ---
 

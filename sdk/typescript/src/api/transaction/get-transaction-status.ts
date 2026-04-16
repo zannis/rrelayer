@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { TransactionReceipt } from 'viem';
 import { getApi } from '../axios-wrapper';
 import { ApiBaseConfig } from '../types';
@@ -14,12 +15,15 @@ export const getTransactionStatus = async (
   baseConfig: ApiBaseConfig
 ): Promise<TransactionStatusResult | null> => {
   try {
-    const response = await getApi<TransactionStatusResult | null>(
+    const response = await getApi<TransactionStatusResult>(
       baseConfig,
       `transactions/status/${transactionId}`
     );
     return response.data;
   } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 404) {
+      return null;
+    }
     console.error('Failed to fetch getTransactionStatus:', error);
     throw error;
   }
