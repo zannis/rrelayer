@@ -1,0 +1,38 @@
+.github/workflows/docker.yml
+  814b1647116b0f24 24,72,134,148,166
+.github/workflows/ci.yml
+  814b1647116b0f24 14,24,34,50,111,154
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "972733d26f14d80c631e6460de1831caab12ac9c",
+  "prompts": {
+    "72c9640506f4da83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cf1d1e9-5b1f-450b-9481-1c888d1b94e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    },
+    "814b1647116b0f24": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "91e0fdd1-a7bb-4978-8f5c-2745b553eedb",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 13,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    }
+  }
+}
