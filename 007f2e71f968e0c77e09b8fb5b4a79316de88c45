@@ -1,0 +1,50 @@
+sdk/typescript/src/api/transaction/get-transaction-by-tx-hash.ts
+  6c27296a7052e648 1,11,17-19
+documentation/rrelayer/docs/pages/changelog.mdx
+  6c27296a7052e648 19
+sdk/typescript/src/api/transaction/get-transaction-status.ts
+  6c27296a7052e648 1,18,24-26
+crates/core/src/transaction/api/get_transaction_by_external_id.rs
+  6c27296a7052e648 9,17,20-24,26-28
+sdk/typescript/src/api/transaction/get-transaction.ts
+  6c27296a7052e648 1,11,17-19
+sdk/typescript/src/api/transaction/get-transaction-by-external-id.ts
+  6c27296a7052e648 1,11,17-19
+crates/core/src/transaction/api/get_transaction_by_tx_hash.rs
+  6c27296a7052e648 9,20,23-27,29-31
+crates/core/src/transaction/api/get_transaction_by_id.rs
+  6c27296a7052e648 9,23,26-28,30-32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "007f2e71f968e0c77e09b8fb5b4a79316de88c45",
+  "prompts": {
+    "6c27296a7052e648": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "dc4c5097-ee8c-448a-9fda-0c308331078c",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 50,
+      "total_deletions": 25,
+      "accepted_lines": 50,
+      "overriden_lines": 0
+    },
+    "72c9640506f4da83": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7cf1d1e9-5b1f-450b-9481-1c888d1b94e6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "zannis",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    }
+  }
+}
